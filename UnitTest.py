@@ -20,7 +20,7 @@ ram = RAM(ramID, company="kivcorp", size=300)
 
 # ----------------------------------------
 
-dropTables()
+
 createTables()
 
 # ----------------------------------------
