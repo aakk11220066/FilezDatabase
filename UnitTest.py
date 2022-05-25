@@ -11,7 +11,8 @@ from Business.Disk import Disk
 conn = DBConnector()
 
 fileID = 123
-file = File(fileID, type="png", size=100)
+file_type = "png"
+file = File(fileID, type=file_type, size=100)
 diskID = 123
 disk = Disk(diskID, company="kivcorp", speed=15, free_space=500, cost=30)
 ramID = 123
@@ -19,22 +20,17 @@ ram = RAM(ramID, company="kivcorp", size=300)
 
 # ----------------------------------------
 
-conn.execute("BEGIN")
-createTables()
-conn.execute("COMMIT")
-
-# ----------------------------------------
-
-conn.execute("BEGIN")
-clearTables()
-conn.execute("COMMIT")
-
-# ----------------------------------------
-
-conn.execute("BEGIN")
 dropTables()
-conn.execute("COMMIT")
-exit()
+createTables()
+
+# ----------------------------------------
+
+clearTables()
+
+# ----------------------------------------
+
+#dropTables()
+
 # ----------------------------------------
 
 
@@ -118,7 +114,7 @@ diskTotalRAM(diskID)
 # ----------------------------------------
 
 
-getCostForType(type)
+getCostForType(type=file_type)
 
 # ----------------------------------------
 
@@ -149,3 +145,6 @@ mostAvailableDisks()
 
 
 getCloseFiles(fileID)
+
+dropTables()
+exit()
