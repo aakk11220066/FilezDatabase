@@ -8,7 +8,6 @@ from Business.Disk import Disk
 from psycopg2 import sql
 
 
-
 # Decorators
 
 def perform_sql_txn(cmd_constructor):
@@ -18,78 +17,102 @@ def perform_sql_txn(cmd_constructor):
     def inner(*args, **kwargs):
         conn = Connector.DBConnector()
         cmd = cmd_constructor(*args, **kwargs)
-        return conn.execute(f"BEGIN; {cmd} COMMIT;")
+
+        try:
+            result = conn.execute(f"BEGIN; {cmd}")
+            conn.commit()
+        except Exception e:
+            conn.rollback()
+            e.conn = conn
+            raise e
+        finally:
+            conn.close()
+        return result
+
     return inner
+
 
 def assert_exists(sql_func):
     # Ensures at least 1 tuple was returned from sql_func, else returns Status.NOT_EXISTS
     def inner(*args, **kwargs):
-        num_results, attributes = sql_func(*args, **kwargs)
-        if num_results == 0:
+        _, attributes = sql_func(*args, **kwargs)
+        if attributes.isEmpty():
             return Status.NOT_EXISTS
         return attributes
+
     return inner
+
 
 def assert_no_database_error(sql_func):
     # catches DatabaseException.UNKNOWN_ERROR
     def inner(*args, **kwargs):
         try:
             result = sql_func(*args, **kwargs)
-        except DatabaseException.UNKNOWN_ERROR:
+        except (DatabaseException.UNKNOWN_ERROR, DatabaseException.ConnectionInvalid):
+            e.conn.close()
             print(e)  # FIXME: DELETEME
             return Status.ERROR
         return result
+
     return inner
+
 
 def return_status(sql_func):
     # Catch exceptions thrown by an SQL query and return the appropriate Status
     def inner(*args, **kwargs):
         try:
             result = sql_func(*args, **kwargs)
-        except (DatabaseException.CHECK_VIOLATION, DatabaseException.NOT_NULL_VIOLATION):
+        except (DatabaseException.CHECK_VIOLATION, DatabaseException.NOT_NULL_VIOLATION) as e:
+            e.conn.close()
             return Status.BAD_PARAMS  # in case of illegal parameters.
-        except DatabaseException.UNIQUE_VIOLATION:
-            return Status.ALREADY_EXISTS   # if a file/disk/ram with the same ID already exists. *
-        except DatabaseException.UNKNOWN_ERROR as e:
+        except DatabaseException.UNIQUE_VIOLATION as e:
+            e.conn.close()
+            return Status.ALREADY_EXISTS  # if a file/disk/ram with the same ID already exists. *
+        except (DatabaseException.UNKNOWN_ERROR, DatabaseException.ConnectionInvalid) as e:
+            e.conn.close()
             print(e)  # FIXME: DELETEME
             return Status.ERROR  # in case of a database error
         if result == Status.NOT_EXISTS:  # output overriden by assert_exists decorator
             return Status.NOT_EXISTS
         return Status.OK
+
     return inner
+
 
 # ----------------------------------------
 
 def get_create_entity_cmd(name, attributes):
-    attr_list = str(attributes)[1:-1].replace("'","")
+    attr_list = str(attributes)[1:-1].replace("'", "")
     return f"CREATE TABLE public.{name}({attr_list}, \
         PRIMARY KEY({name}ID)); "
 
+
 def get_create_entities_cmd():
     return get_create_entity_cmd("file", (
-            'fileID     integer     NOT NULL    CHECK (fileID > 0)',
-            'type       text        NOT NULL',
-            'size       integer     NOT NULL    CHECK (size >= 0)'
-        )) + \
-        get_create_entity_cmd("disk", (
-            'diskID     integer     NOT NULL    CHECK (diskID > 0)',
-            'company    text        NOT NULL',
-            'speed      integer     NOT NULL    CHECK (speed > 0)',
-            'free_space integer     NOT NULL    CHECK (free_space >= 0)',
-            'cost       integer     NOT NULL    CHECK (cost > 0)'
-        )) + \
-        get_create_entity_cmd("ram", (
-            'ramID      integer     NOT NULL    CHECK (ramID > 0)',
-            'company    text        NOT NULL',
-            'size       integer     NOT NULL    CHECK (size > 0)'
-        ))
+        'fileID     integer     NOT NULL    CHECK (fileID > 0)',
+        'type       text        NOT NULL',
+        'size       integer     NOT NULL    CHECK (size >= 0)'
+    )) + \
+           get_create_entity_cmd("disk", (
+               'diskID     integer     NOT NULL    CHECK (diskID > 0)',
+               'company    text        NOT NULL',
+               'speed      integer     NOT NULL    CHECK (speed > 0)',
+               'free_space integer     NOT NULL    CHECK (free_space >= 0)',
+               'cost       integer     NOT NULL    CHECK (cost > 0)'
+           )) + \
+           get_create_entity_cmd("ram", (
+               'ramID      integer     NOT NULL    CHECK (ramID > 0)',
+               'company    text        NOT NULL',
+               'size       integer     NOT NULL    CHECK (size > 0)'
+           ))
 
-def get_create_many2one_relation_cmd(name, src, tgt):
+
+def get_create_many2many_relation_cmd(name, src, tgt):
     return f" \
             CREATE TABLE public.{name}( \
                 {src}ID integer, \
                 {tgt}ID integer, \
-                PRIMARY KEY ({src}ID), \
+                UNIQUE ({src}ID, {tgt}ID),
                 FOREIGN KEY ({src}ID) \
                     REFERENCES public.{src} ({src}ID) \
                     ON UPDATE CASCADE \
@@ -100,30 +123,39 @@ def get_create_many2one_relation_cmd(name, src, tgt):
                     ON DELETE CASCADE \
             ); "
 
+
 def get_create_relations_cmd():
-    return get_create_many2one_relation_cmd("file_on_disk", src='file', tgt='disk') + \
-        get_create_many2one_relation_cmd("ram_on_disk", src='ram', tgt='disk')
+    return get_create_many2many_relation_cmd("file_on_disk", src='file', tgt='disk') + \
+           get_create_many2many_relation_cmd("ram_on_disk", src='ram', tgt='disk')
+
 
 def get_create_view_cmd(name, attributes, src_table):
     return f"CREATE VIEW public.{name} AS (SELECT {attributes} FROM {src_table}); "
 
+
 def get_create_views_cmd():
     return get_create_view_cmd(
-            "all_files_on_disk",
-            "diskID, public.file_on_disk.fileID, type, size",
-            "public.file INNER JOIN public.file_on_disk ON public.file.fileID=public.file_on_disk.fileID"
-        ) + \
-        get_create_view_cmd(
-            "all_rams_on_disk",
-            "diskID, public.ram_on_disk.ramID, company, size",
-            "public.ram INNER JOIN public.ram_on_disk ON public.ram.ramID=public.ram_on_disk.ramID"
-        )
+        "all_files_on_disk",
+        "diskID, public.file_on_disk.fileID, type, size",
+        "public.file INNER JOIN public.file_on_disk ON public.file.fileID=public.file_on_disk.fileID"
+    ) + \
+   get_create_view_cmd(
+       "all_rams_on_disk",
+       "diskID, public.ram_on_disk.ramID, company, size",
+       "public.ram INNER JOIN public.ram_on_disk ON public.ram.ramID=public.ram_on_disk.ramID"
+   ) + \
+   get_create_view_cmd(
+        "spaces",
+        "size, fileID, diskID, free_space, cost",   #FIXME
+        "public.all_files_on_disk INNER JOIN public.disk ON public.disk.diskID=public.all_files_on_disk.diskID"
+   )
+
 
 @perform_sql_txn
 def createTables():
     return get_create_entities_cmd() + \
-        get_create_relations_cmd() + \
-        get_create_views_cmd()
+           get_create_relations_cmd() + \
+           get_create_views_cmd()
 
 
 # ----------------------------------------
@@ -131,26 +163,31 @@ def createTables():
 def get_clear_table_cmd(name):
     return f"DELETE FROM {name} CASCADE; "
 
+
 @perform_sql_txn
 def clearTables():
     return get_clear_table_cmd("file") + \
-        get_clear_table_cmd("ram") + \
-        get_clear_table_cmd("disk") + \
-        get_clear_table_cmd("file_on_disk") + \
-        get_clear_table_cmd("ram_on_disk")
+           get_clear_table_cmd("ram") + \
+           get_clear_table_cmd("disk") + \
+           get_clear_table_cmd("file_on_disk") + \
+           get_clear_table_cmd("ram_on_disk")
+
 
 # ----------------------------------------
 
 def get_drop_table_cmd(name):
     return f"DROP TABLE {name} CASCADE; "
 
+
 @perform_sql_txn
 def dropTables():
     return get_drop_table_cmd("file") + \
-        get_drop_table_cmd("disk") + \
-        get_drop_table_cmd("ram") + \
-        get_drop_table_cmd("file_on_disk") + \
-        get_drop_table_cmd("ram_on_disk")
+           get_drop_table_cmd("disk") + \
+           get_drop_table_cmd("ram") + \
+           get_drop_table_cmd("file_on_disk") + \
+           get_drop_table_cmd("ram_on_disk") + \
+           get_drop_table_cmd("places")
+
 
 # ----------------------------------------
 
@@ -160,6 +197,7 @@ def addFile(file: File) -> Status:
     return f"INSERT INTO public.file (fileID, type, size) \
             VALUES({file.getFileID()},'{file.getType()}',{file.getSize()});"
 
+
 # ----------------------------------------
 
 @assert_exists
@@ -168,12 +206,14 @@ def getFileAttributesByID(fileID: int):
     return f"SELECT * FROM public.file  \
         WHERE fileID={fileID};"
 
+
 def getFileByID(fileID: int) -> File:
     selected_files = getFileAttributesByID(fileID)
     if selected_files == Status.NOT_EXISTS:
         return File.badFile()
     file_attributes = selected_files[0]
     return File(**file_attributes)
+
 
 # ----------------------------------------
 
@@ -183,7 +223,7 @@ def deleteFile(file: File) -> Status:
     return f" \
         DELETE FROM public.file \
         WHERE fileID={file.getFileID()}; " + \
-        f" \
+           f" \
         UPDATE public.disk \
         SET free_space=free_space + {file.getSize()} \
         WHERE diskID IN ( \
@@ -200,6 +240,7 @@ def addDisk(disk: Disk) -> Status:
     return f"INSERT INTO public.disk (diskID, company, speed, free_space, cost) \
         VALUES({disk.getDiskID()},'{disk.getCompany()}',{disk.getSpeed()},{disk.getFreeSpace()},{disk.getCost()}); "
 
+
 # ----------------------------------------
 
 @assert_exists
@@ -208,12 +249,14 @@ def getDiskAttributesByID(diskID: int):
     return f"SELECT * FROM public.disk \
         WHERE diskID={diskID};"
 
+
 def getDiskByID(diskID: int) -> Disk:
     selected_disks = getDiskAttributesByID(diskID)
     if selected_disks == Status.NOT_EXISTS:
         return Disk.badDisk()
     disk_attributes = selected_disks[0]
     return Disk(**disk_attributes)
+
 
 # ----------------------------------------
 
@@ -225,6 +268,7 @@ def deleteDisk(diskID: int) -> Status:
     return f"DELETE FROM public.disk \
         WHERE diskID={diskID}; "
 
+
 # ----------------------------------------
 
 @return_status
@@ -232,6 +276,7 @@ def deleteDisk(diskID: int) -> Status:
 def addRAM(ram: RAM) -> Status:
     return f"INSERT INTO public.ram (ramID, company, size) \
                 VALUES({ram.getRamID()},'{ram.getCompany()}',{ram.getSize()}); "
+
 
 # ----------------------------------------
 
@@ -241,12 +286,14 @@ def getRAMAttributesByID(ramID: int):
     return f"SELECT * FROM public.ram \
         WHERE ramID={ramID}; "
 
+
 def getRAMByID(ramID: int) -> RAM:
     selected_rams = getRAMAttributesByID(ramID)
     if selected_rams == Status.NOT_EXISTS:
         return RAM.badRAM()
     ram_attributes = selected_rams[0]
     return RAM(**ram_attributes)
+
 
 # ----------------------------------------
 
@@ -256,6 +303,7 @@ def getRAMByID(ramID: int) -> RAM:
 def deleteRAM(ramID: int) -> Status:
     return f"DELETE FROM public.ram \
         WHERE ramID={ramID}; "
+
 
 # ----------------------------------------
 
@@ -267,6 +315,7 @@ def addDiskAndFile(disk: Disk, file: File) -> Status:
                 VALUES({disk.getDiskID()},'{disk.getCompany()}',{disk.getSpeed()},{disk.getFreeSpace()},{disk.getCost()}); \
             INSERT INTO public.file (fileID, type, size) \
                 VALUES({file.getFileID()},'{file.getType()}',{file.getSize()}); "
+
 
 # ----------------------------------------
 
@@ -281,7 +330,7 @@ def addFileToDisk(file: File, diskID: int) -> Status:
             CROSS JOIN \
             (SELECT diskID FROM public.disk WHERE diskID={diskID}) needless_alias2  \
         ); " + \
-        f" \
+           f" \
         UPDATE public.disk \
         SET free_space=free_space - {file.getSize()} \
         WHERE diskID = {diskID}; "
@@ -295,7 +344,7 @@ def removeFileFromDisk(file: File, diskID: int) -> Status:
     return f" \
         DELETE FROM public.file_on_disk \
         WHERE fileID={file.getFileID()} AND diskID={diskID}; " + \
-        f" \
+           f" \
         UPDATE public.disk \
         SET free_space=free_space + {file.getSize()} \
         WHERE diskID={diskID};"  # modify free space of disk \
@@ -315,6 +364,7 @@ def addRAMToDisk(ramID: int, diskID: int) -> Status:
             (SELECT diskID FROM public.disk WHERE diskID={diskID}) needless_alias2 \
         ); "
 
+
 # ----------------------------------------
 
 @return_status
@@ -324,6 +374,7 @@ def removeRAMFromDisk(ramID: int, diskID: int) -> Status:
     return f" \
         DELETE FROM public.ram_on_disk \
         WHERE ramID={ramID} AND diskID={diskID}; "
+
 
 # ----------------------------------------
 
@@ -335,6 +386,7 @@ def _averageFileSizeOnDisk(diskID: int):
         SELECT AVG(size) FROM public.all_files_on_disk \
         WHERE diskID = {diskID};"
 
+
 def averageFileSizeOnDisk(diskID: int) -> float:
     averages = _averageFileSizeOnDisk(diskID)
     if averages == Status.ERROR:
@@ -342,6 +394,7 @@ def averageFileSizeOnDisk(diskID: int) -> float:
     if averages == Status.NOT_EXISTS:
         return 0
     return averages[0]["avg"]
+
 
 # ----------------------------------------
 
@@ -352,6 +405,7 @@ def _diskTotalRAM(diskID: int):
     return f" \
         SELECT SUM(size) FROM public.all_rams_on_disk \
         WHERE diskID = {diskID};"
+
 
 def diskTotalRAM(diskID: int) -> int:
     sums = _diskTotalRAM(diskID)
@@ -369,8 +423,9 @@ def diskTotalRAM(diskID: int) -> int:
 @perform_sql_txn
 def _getCostForType(type: str):
     return f" \
-        SELECT SUM(cost*size) FROM public.all_files_on_disk INNER JOIN public.disk ON public.all_files_on_disk.diskID=public.disk.diskID \
+        SELECT SUM(cost*size) FROM public.spaces \
         WHERE type='{type}'; "
+
 
 def getCostForType(type: str) -> int:
     total_cost = _getCostForType(type)
@@ -392,17 +447,18 @@ def _getFilesCanBeAddedToDisk(diskID: int):
         ORDER BY fileID DESC \
         LIMIT 5; "
 
+
 def getFilesCanBeAddedToDisk(diskID: int) -> List[int]:
-    num_files, suggested_files = _getFilesCanBeAddedToDisk(diskID)
-    if suggested_files == Status.ERROR:
-        return []
-    return [suggested_files[i]["fileID"] for i in range(num_files)]
+    suggested_files = _getFilesCanBeAddedToDisk(diskID)
+    return [suggested_files[i]["fileID"] for i in range(suggested_files.size())]
+
 
 # ----------------------------------------
 
 # note that both file and ram have a size attribute!
 def getFilesCanBeAddedToDiskAndRAM(diskID: int) -> List[int]:
     return []
+
 
 # ----------------------------------------
 
@@ -417,23 +473,66 @@ def _isCompanyExclusive(diskID: int):
             WHERE diskID={diskID} \
         ); "
 
+
 def isCompanyExclusive(diskID: int) -> bool:
     return type(_isCompanyExclusive(diskID)) != Status  # query didn't fail on the database_error assertion nor the exists assertion
 
+
 # ----------------------------------------
 
+@assert_no_database_error
+@perform_sql_txn
+def _getConflictingDisks():
+    return f" \
+        SELECT DISTINCT file1tbl.diskID FROM public.file_on_disk AS file1tbl INNER JOIN public.file_on_disk AS file2tbl ON file1tbl.fileID = file2tbl.fileID \
+        WHERE file1tbl.diskID <> file2tbl,diskID \
+        ORDER BY file1tbl.diskID ASC;"
 
 def getConflictingDisks() -> List[int]:
-    return []
+    conflicting_disks = _getConflictingDisks()
+    return [conflicting_disks[i]["diskID"] for i in range(conflicting_disks.size())]
+
 
 # ----------------------------------------
 
+@assert_no_database_error
+@perform_sql_txn
+def _mostAvailableDisks():
+    return f" \
+        SELECT diskID FROM public.disk INNER JOIN ( \
+             SELECT diskID, COUNT(*) FROM ( \
+                 SELECT diskID, fileID FROM public.file CROSS JOIN public.disk \
+                 WHERE size<=free_space \
+             ) files_that_fit_on_disks \
+             GROUP BY diskID \
+        ) num_files_addable_to_disk ON public.disk.diskID = num_files_addable_to_disk.diskID \
+        ORDER BY count DESC, speed DESC, diskID DESC \
+        LIMIT 5; "
 
 def mostAvailableDisks() -> List[int]:
-    return []
+    most_available_disk = _mostAvailableDisks()
+    return [most_available_disk[i]["diskID"] for i in range(most_available_disk.size())]
 
 # ----------------------------------------
 
 
+@perform_sql_txn
+def _getCloseFiles(fileID: int):
+    return f" \
+        SELECT fileID FROM ( \
+            SELECT fileID, COUNT(*) FROM public.file_on_disk \
+            WHERE diskID IN ( \
+                SELECT diskID FROM public.file_on_disk \
+                WHERE fileID={fileID} \
+            ) host_disks \
+            GROUP BY fileID \
+            WHERE count >= COUNT(host_disks.diskID)*0.5 \
+            ORDER BY count DESC \
+            LIMIT 10 \
+        ) disordered_results \
+        ORDER BY count ASC \
+    ;"
+
 def getCloseFiles(fileID: int) -> List[int]:
-    return []
+    closest_files = _getCloseFiles()
+    return [closest_files[i]["fileID"] for i in range(closest_files.size())]
