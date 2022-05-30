@@ -21,7 +21,7 @@ def perform_sql_txn(cmd_constructor):
 
         try:
             #print(cmd) #FIXME: DELETEME
-            _, result = conn.execute(f"BEGIN; {cmd}")
+            num_results, result = conn.execute(f"BEGIN; {cmd}")
             conn.commit()
         except Exception as e:
             conn.rollback()
@@ -30,7 +30,7 @@ def perform_sql_txn(cmd_constructor):
             raise e
         finally:
             conn.close()
-        return result
+        return num_results, result
 
     return inner
 
@@ -38,8 +38,8 @@ def perform_sql_txn(cmd_constructor):
 def assert_exists(sql_func):
     # Ensures at least 1 tuple was returned from sql_func, else returns Status.NOT_EXISTS
     def inner(*args, **kwargs):
-        attributes = sql_func(*args, **kwargs)
-        if attributes.isEmpty():
+        num_results, attributes = sql_func(*args, **kwargs)
+        if num_results == 0:
             return Status.NOT_EXISTS
         return attributes
 
@@ -51,7 +51,7 @@ def assert_no_database_error(sql_func):
     def inner(*args, **kwargs):
         try:
             result = sql_func(*args, **kwargs)
-        except (DatabaseException.UNKNOWN_ERROR, DatabaseException.ConnectionInvalid, psycopg2.DatabaseError):
+        except (DatabaseException.UNKNOWN_ERROR, DatabaseException.ConnectionInvalid, psycopg2.DatabaseError) as e:
             e.conn.close()
             #print(e)  # FIXME: DELETEME
             return Status.ERROR
