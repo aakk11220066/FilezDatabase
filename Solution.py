@@ -230,15 +230,14 @@ def getFileByID(fileID: int) -> File:
 @perform_sql_txn
 def deleteFile(file: File) -> Status:
     return f" \
-        DELETE FROM public.file \
-        WHERE fileID={none_to_null(file.getFileID())}; " + \
-           f" \
         UPDATE public.disk \
         SET free_space=free_space + {none_to_null(file.getSize())} \
         WHERE diskID IN ( \
             SELECT diskID FROM public.file_on_disk \
             WHERE fileID={none_to_null(file.getFileID())} \
-        ); "  # update free space on disk
+        ); " + f" \
+        DELETE FROM public.file \
+        WHERE fileID={none_to_null(file.getFileID())}; "
 
 
 # ----------------------------------------
