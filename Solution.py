@@ -158,7 +158,7 @@ def get_create_views_cmd():
        "public.ram INNER JOIN public.ram_on_disk ON public.ram.ramID=public.ram_on_disk.ramID"
    )
 
-
+@return_status
 @perform_sql_txn
 def createTables():
     return get_create_entities_cmd() + \
@@ -171,7 +171,7 @@ def createTables():
 def get_clear_table_cmd(name):
     return f"DELETE FROM {name} CASCADE; "
 
-
+@return_status
 @perform_sql_txn
 def clearTables():
     return get_clear_table_cmd("file") + \
@@ -187,6 +187,7 @@ def get_drop_table_cmd(name):
     return f"DROP TABLE {name} CASCADE; "
 
 
+@return_status
 @perform_sql_txn
 def dropTables():
     return get_drop_table_cmd("file") + \
