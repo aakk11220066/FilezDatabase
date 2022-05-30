@@ -19,9 +19,9 @@ def perform_sql_txn(cmd_constructor):
         cmd = cmd_constructor(*args, **kwargs)
 
         try:
-            result = conn.execute(f"BEGIN; {cmd}")
+            _, result = conn.execute(f"BEGIN; {cmd}")
             conn.commit()
-        except Exception e:
+        except Exception as e:
             conn.rollback()
             e.conn = conn
             raise e
@@ -35,7 +35,7 @@ def perform_sql_txn(cmd_constructor):
 def assert_exists(sql_func):
     # Ensures at least 1 tuple was returned from sql_func, else returns Status.NOT_EXISTS
     def inner(*args, **kwargs):
-        _, attributes = sql_func(*args, **kwargs)
+        attributes = sql_func(*args, **kwargs)
         if attributes.isEmpty():
             return Status.NOT_EXISTS
         return attributes
@@ -112,7 +112,7 @@ def get_create_many2many_relation_cmd(name, src, tgt):
             CREATE TABLE public.{name}( \
                 {src}ID integer, \
                 {tgt}ID integer, \
-                UNIQUE ({src}ID, {tgt}ID),
+                UNIQUE ({src}ID, {tgt}ID), \
                 FOREIGN KEY ({src}ID) \
                     REFERENCES public.{src} ({src}ID) \
                     ON UPDATE CASCADE \
@@ -143,11 +143,6 @@ def get_create_views_cmd():
        "all_rams_on_disk",
        "diskID, public.ram_on_disk.ramID, company, size",
        "public.ram INNER JOIN public.ram_on_disk ON public.ram.ramID=public.ram_on_disk.ramID"
-   ) + \
-   get_create_view_cmd(
-        "spaces",
-        "size, fileID, diskID, free_space, cost",   #FIXME
-        "public.all_files_on_disk INNER JOIN public.disk ON public.disk.diskID=public.all_files_on_disk.diskID"
    )
 
 
@@ -185,8 +180,7 @@ def dropTables():
            get_drop_table_cmd("disk") + \
            get_drop_table_cmd("ram") + \
            get_drop_table_cmd("file_on_disk") + \
-           get_drop_table_cmd("ram_on_disk") + \
-           get_drop_table_cmd("places")
+           get_drop_table_cmd("ram_on_disk")
 
 
 # ----------------------------------------
@@ -212,6 +206,7 @@ def getFileByID(fileID: int) -> File:
     if selected_files == Status.NOT_EXISTS:
         return File.badFile()
     file_attributes = selected_files[0]
+    file_attributes["fileID"] = file_attributes.pop("fileid")
     return File(**file_attributes)
 
 
@@ -255,6 +250,7 @@ def getDiskByID(diskID: int) -> Disk:
     if selected_disks == Status.NOT_EXISTS:
         return Disk.badDisk()
     disk_attributes = selected_disks[0]
+    disk_attributes["diskID"] = disk_attributes.pop("diskid")
     return Disk(**disk_attributes)
 
 
@@ -292,6 +288,7 @@ def getRAMByID(ramID: int) -> RAM:
     if selected_rams == Status.NOT_EXISTS:
         return RAM.badRAM()
     ram_attributes = selected_rams[0]
+    ram_attributes["ramID"] = ram_attributes.pop("ramid")
     return RAM(**ram_attributes)
 
 
@@ -423,7 +420,7 @@ def diskTotalRAM(diskID: int) -> int:
 @perform_sql_txn
 def _getCostForType(type: str):
     return f" \
-        SELECT SUM(cost*size) FROM public.spaces \
+        SELECT SUM(cost*size) FROM public.all_files_on_disk INNER JOIN public.disk ON public.disk.diskID=public.all_files_on_disk.diskID \
         WHERE type='{type}'; "
 
 
@@ -485,7 +482,7 @@ def isCompanyExclusive(diskID: int) -> bool:
 def _getConflictingDisks():
     return f" \
         SELECT DISTINCT file1tbl.diskID FROM public.file_on_disk AS file1tbl INNER JOIN public.file_on_disk AS file2tbl ON file1tbl.fileID = file2tbl.fileID \
-        WHERE file1tbl.diskID <> file2tbl,diskID \
+        WHERE file1tbl.diskID <> file2tbl.diskID \
         ORDER BY file1tbl.diskID ASC;"
 
 def getConflictingDisks() -> List[int]:
@@ -499,9 +496,9 @@ def getConflictingDisks() -> List[int]:
 @perform_sql_txn
 def _mostAvailableDisks():
     return f" \
-        SELECT diskID FROM public.disk INNER JOIN ( \
-             SELECT diskID, COUNT(*) FROM ( \
-                 SELECT diskID, fileID FROM public.file CROSS JOIN public.disk \
+        SELECT num_files_addable_to_disk.diskID FROM public.disk INNER JOIN ( \
+             SELECT files_that_fit_on_disks.diskID, COUNT(*) FROM ( \
+                 SELECT DISTINCT diskID, fileID FROM public.file CROSS JOIN public.disk \
                  WHERE size<=free_space \
              ) files_that_fit_on_disks \
              GROUP BY diskID \
@@ -515,7 +512,7 @@ def mostAvailableDisks() -> List[int]:
 
 # ----------------------------------------
 
-
+@assert_no_database_error
 @perform_sql_txn
 def _getCloseFiles(fileID: int):
     return f" \
@@ -524,9 +521,12 @@ def _getCloseFiles(fileID: int):
             WHERE diskID IN ( \
                 SELECT diskID FROM public.file_on_disk \
                 WHERE fileID={fileID} \
-            ) host_disks \
+            ) \
             GROUP BY fileID \
-            WHERE count >= COUNT(host_disks.diskID)*0.5 \
+            HAVING 2*COUNT(*) >=ALL ( \
+                SELECT COUNT(*) FROM public.file_on_disk \
+                WHERE fileID={fileID} \
+            ) \
             ORDER BY count DESC \
             LIMIT 10 \
         ) disordered_results \
@@ -534,5 +534,5 @@ def _getCloseFiles(fileID: int):
     ;"
 
 def getCloseFiles(fileID: int) -> List[int]:
-    closest_files = _getCloseFiles()
+    closest_files = _getCloseFiles(fileID)
     return [closest_files[i]["fileID"] for i in range(closest_files.size())]
