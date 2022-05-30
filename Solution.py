@@ -38,7 +38,10 @@ def perform_sql_txn(cmd_constructor):
 def assert_exists(sql_func):
     # Ensures at least 1 tuple was returned from sql_func, else returns Status.NOT_EXISTS
     def inner(*args, **kwargs):
-        num_results, attributes = sql_func(*args, **kwargs)
+        try:
+            num_results, attributes = sql_func(*args, **kwargs)
+        except DatabaseException.FOREIGN_KEY_VIOLATION:
+            return Status.NOT_EXISTS
         if num_results == 0:
             return Status.NOT_EXISTS
         return attributes
@@ -52,7 +55,6 @@ def assert_no_database_error(sql_func):
         try:
             result = sql_func(*args, **kwargs)
         except (DatabaseException.UNKNOWN_ERROR, DatabaseException.ConnectionInvalid, psycopg2.DatabaseError) as e:
-            e.conn.close()
             #print(e)  # FIXME: DELETEME
             return Status.ERROR
         return result
@@ -205,6 +207,7 @@ def addFile(file: File) -> Status:
 
 # ----------------------------------------
 
+@assert_no_database_error
 @assert_exists
 @perform_sql_txn
 def getFileAttributesByID(fileID: int):
@@ -214,7 +217,7 @@ def getFileAttributesByID(fileID: int):
 
 def getFileByID(fileID: int) -> File:
     selected_files = getFileAttributesByID(fileID)
-    if selected_files == Status.NOT_EXISTS:
+    if type(selected_files) == Status:
         return File.badFile()
     file_attributes = selected_files[0]
     file_attributes["fileID"] = file_attributes.pop("fileid")
@@ -249,6 +252,7 @@ def addDisk(disk: Disk) -> Status:
 
 # ----------------------------------------
 
+@assert_no_database_error
 @assert_exists
 @perform_sql_txn
 def getDiskAttributesByID(diskID: int):
@@ -258,7 +262,7 @@ def getDiskAttributesByID(diskID: int):
 
 def getDiskByID(diskID: int) -> Disk:
     selected_disks = getDiskAttributesByID(diskID)
-    if selected_disks == Status.NOT_EXISTS:
+    if type(selected_disks) == Status:
         return Disk.badDisk()
     disk_attributes = selected_disks[0]
     disk_attributes["diskID"] = disk_attributes.pop("diskid")
@@ -287,6 +291,7 @@ def addRAM(ram: RAM) -> Status:
 
 # ----------------------------------------
 
+@assert_no_database_error
 @assert_exists
 @perform_sql_txn
 def getRAMAttributesByID(ramID: int):
@@ -296,7 +301,7 @@ def getRAMAttributesByID(ramID: int):
 
 def getRAMByID(ramID: int) -> RAM:
     selected_rams = getRAMAttributesByID(ramID)
-    if selected_rams == Status.NOT_EXISTS:
+    if type(selected_rams) == Status:
         return RAM.badRAM()
     ram_attributes = selected_rams[0]
     ram_attributes["ramID"] = ram_attributes.pop("ramid")
@@ -333,12 +338,8 @@ def addDiskAndFile(disk: Disk, file: File) -> Status:
 def addFileToDisk(file: File, diskID: int) -> Status:
     return f" \
         INSERT INTO public.file_on_disk (fileID, diskID) \
-        SELECT * FROM ( \
-            (SELECT fileID FROM public.file WHERE fileID={none_to_null(file.getFileID())}) needless_alias1  \
-            CROSS JOIN \
-            (SELECT diskID FROM public.disk WHERE diskID={none_to_null(diskID)}) needless_alias2  \
-        ); " + \
-           f" \
+        VALUES ({none_to_null(file.getFileID())}, {diskID}); " + \
+        f" \
         UPDATE public.disk \
         SET free_space=free_space - {none_to_null(file.getSize())} \
         WHERE diskID = {diskID}; "
@@ -349,13 +350,16 @@ def addFileToDisk(file: File, diskID: int) -> Status:
 @return_status
 @perform_sql_txn
 def removeFileFromDisk(file: File, diskID: int) -> Status:
+    # modify free space of disk first (so we can check if file was on disk), then remove file from disk.  If fails, free_space modification will be rolled back as well
     return f" \
-        DELETE FROM public.file_on_disk \
-        WHERE fileID={none_to_null(file.getFileID())} AND diskID={diskID}; " + \
-           f" \
         UPDATE public.disk \
         SET free_space=free_space + {none_to_null(file.getSize())} \
-        WHERE diskID={diskID};"  # modify free space of disk \
+        WHERE diskID={diskID} AND EXISTS ( \
+            SELECT * FROM public.file_on_disk \
+            WHERE diskID={diskID} AND fileID={none_to_null(file.getFileID())} \
+        ); " + f" \
+        DELETE FROM public.file_on_disk \
+        WHERE fileID={none_to_null(file.getFileID())} AND diskID={diskID}; "
 
 
 # ----------------------------------------
