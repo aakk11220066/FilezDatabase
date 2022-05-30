@@ -20,11 +20,13 @@ def perform_sql_txn(cmd_constructor):
         cmd = cmd_constructor(*args, **kwargs)
 
         try:
+            #print(cmd) #FIXME: DELETEME
             _, result = conn.execute(f"BEGIN; {cmd}")
             conn.commit()
         except Exception as e:
             conn.rollback()
             e.conn = conn
+            #print(e) #FIXME: DELETEME
             raise e
         finally:
             conn.close()
@@ -78,6 +80,14 @@ def return_status(sql_func):
         return Status.OK
 
     return inner
+
+
+# Helper functions
+
+def none_to_null(input, is_str=False):
+    if input is None:
+        return "NULL"
+    return input if not is_str else f"'{input}'"
 
 
 # ----------------------------------------
@@ -190,7 +200,7 @@ def dropTables():
 @perform_sql_txn
 def addFile(file: File) -> Status:
     return f"INSERT INTO public.file (fileID, type, size) \
-            VALUES({file.getFileID()},'{file.getType()}',{file.getSize()});"
+            VALUES({none_to_null(file.getFileID())},{none_to_null(file.getType(), True)},{none_to_null(file.getSize())});"
 
 
 # ----------------------------------------
@@ -218,13 +228,13 @@ def getFileByID(fileID: int) -> File:
 def deleteFile(file: File) -> Status:
     return f" \
         DELETE FROM public.file \
-        WHERE fileID={file.getFileID()}; " + \
+        WHERE fileID={none_to_null(file.getFileID())}; " + \
            f" \
         UPDATE public.disk \
-        SET free_space=free_space + {file.getSize()} \
+        SET free_space=free_space + {none_to_null(file.getSize())} \
         WHERE diskID IN ( \
             SELECT diskID FROM public.file_on_disk \
-            WHERE fileID={file.getFileID()} \
+            WHERE fileID={none_to_null(file.getFileID())} \
         ); "  # update free space on disk
 
 
@@ -234,7 +244,7 @@ def deleteFile(file: File) -> Status:
 @perform_sql_txn
 def addDisk(disk: Disk) -> Status:
     return f"INSERT INTO public.disk (diskID, company, speed, free_space, cost) \
-        VALUES({disk.getDiskID()},'{disk.getCompany()}',{disk.getSpeed()},{disk.getFreeSpace()},{disk.getCost()}); "
+        VALUES({none_to_null(disk.getDiskID())},{none_to_null(disk.getCompany(), True)},{none_to_null(disk.getSpeed())},{none_to_null(disk.getFreeSpace())},{none_to_null(disk.getCost())}); "
 
 
 # ----------------------------------------
@@ -272,7 +282,7 @@ def deleteDisk(diskID: int) -> Status:
 @perform_sql_txn
 def addRAM(ram: RAM) -> Status:
     return f"INSERT INTO public.ram (ramID, company, size) \
-                VALUES({ram.getRamID()},'{ram.getCompany()}',{ram.getSize()}); "
+                VALUES({none_to_null(ram.getRamID())},{none_to_null(ram.getCompany(), True)},{none_to_null(ram.getSize())}); "
 
 
 # ----------------------------------------
@@ -310,9 +320,9 @@ def deleteRAM(ramID: int) -> Status:
 def addDiskAndFile(disk: Disk, file: File) -> Status:
     return f"\
             INSERT INTO public.disk (diskID, company, speed, free_space, cost) \
-                VALUES({disk.getDiskID()},'{disk.getCompany()}',{disk.getSpeed()},{disk.getFreeSpace()},{disk.getCost()}); \
+                VALUES({none_to_null(disk.getDiskID())},{none_to_null(disk.getCompany(), True)},{none_to_null(disk.getSpeed())},{none_to_null(disk.getFreeSpace())},{none_to_null(disk.getCost())}); \
             INSERT INTO public.file (fileID, type, size) \
-                VALUES({file.getFileID()},'{file.getType()}',{file.getSize()}); "
+                VALUES({none_to_null(file.getFileID())},{none_to_null(file.getType(), True)},{none_to_null(file.getSize())}); "
 
 
 # ----------------------------------------
@@ -324,13 +334,13 @@ def addFileToDisk(file: File, diskID: int) -> Status:
     return f" \
         INSERT INTO public.file_on_disk (fileID, diskID) \
         SELECT * FROM ( \
-            (SELECT fileID FROM public.file WHERE fileID={file.getFileID()}) needless_alias1  \
+            (SELECT fileID FROM public.file WHERE fileID={none_to_null(file.getFileID())}) needless_alias1  \
             CROSS JOIN \
-            (SELECT diskID FROM public.disk WHERE diskID={diskID}) needless_alias2  \
+            (SELECT diskID FROM public.disk WHERE diskID={none_to_null(diskID)}) needless_alias2  \
         ); " + \
            f" \
         UPDATE public.disk \
-        SET free_space=free_space - {file.getSize()} \
+        SET free_space=free_space - {none_to_null(file.getSize())} \
         WHERE diskID = {diskID}; "
 
 
@@ -341,10 +351,10 @@ def addFileToDisk(file: File, diskID: int) -> Status:
 def removeFileFromDisk(file: File, diskID: int) -> Status:
     return f" \
         DELETE FROM public.file_on_disk \
-        WHERE fileID={file.getFileID()} AND diskID={diskID}; " + \
+        WHERE fileID={none_to_null(file.getFileID())} AND diskID={diskID}; " + \
            f" \
         UPDATE public.disk \
-        SET free_space=free_space + {file.getSize()} \
+        SET free_space=free_space + {none_to_null(file.getSize())} \
         WHERE diskID={diskID};"  # modify free space of disk \
 
 
@@ -422,7 +432,7 @@ def diskTotalRAM(diskID: int) -> int:
 def _getCostForType(type: str):
     return f" \
         SELECT SUM(cost*size) FROM public.all_files_on_disk INNER JOIN public.disk ON public.disk.diskID=public.all_files_on_disk.diskID \
-        WHERE type='{type}'; "
+        WHERE type={none_to_null(type, True)}; "
 
 
 def getCostForType(type: str) -> int:
