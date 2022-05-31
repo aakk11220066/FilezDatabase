@@ -464,14 +464,28 @@ def getFilesCanBeAddedToDisk(diskID: int) -> List[int]:
     suggested_files = _getFilesCanBeAddedToDisk(diskID)
     if type(suggested_files) == Status:
         return []
-    return [suggested_files[i]["fileID"] for i in range(suggested_files.size())]
+    _, suggested = suggested_files
+    return [suggested[i]["fileID"] for i in range(suggested.size())]
 
 
 # ----------------------------------------
 
-# note that both file and ram have a size attribute!
+def _getFilesCanBeAddedToDiskAndRAM(DiskID: int):
+    return f" \
+    SELECT fileID FROM \
+        public.file, \
+        (SELECT free_space FROM public.disk WHERE diskID={diskID}) disk_freespace_singleton, \
+        (SELECT SUM(size) as ram_space FROM public.all_rams_on_disk WHERE diskID={diskID}) disk_ramspace_singleton \
+    WHERE size <= free_space AND size <= ram_space \
+    ORDER BY fileID ASC \
+    LIMIT 5; "
+
 def getFilesCanBeAddedToDiskAndRAM(diskID: int) -> List[int]:
-    return []
+    canBeAdded = _getFilesCanBeAddedToDiskAndRAM(diskID)
+    if type(canBeAdded) == Status:
+        return []
+    _, filesCanBeAdded = canBeAdded
+    return [filesCanBeAdded[i]["fileID"] for i in range(filesCanBeAdded.size())]
 
 
 # ----------------------------------------
@@ -506,7 +520,8 @@ def getConflictingDisks() -> List[int]:
     conflicting_disks = _getConflictingDisks()
     if type(conflicting_disks) == Status:
         return []
-    return [conflicting_disks[i]["diskID"] for i in range(conflicting_disks.size())]
+    _, conflicting = conflicting_disks
+    return [conflicting[i]["diskID"] for i in range(conflicting.size())]
 
 
 # ----------------------------------------
@@ -522,14 +537,15 @@ def _mostAvailableDisks():
              ) files_that_fit_on_disks \
              GROUP BY diskID \
         ) num_files_addable_to_disk ON public.disk.diskID = num_files_addable_to_disk.diskID \
-        ORDER BY count DESC NULLS LAST, speed DESC NULLS LAST, diskID DESC NULLS LAST \
+        ORDER BY count DESC NULLS LAST, speed DESC NULLS LAST, diskID ASC NULLS LAST\
         LIMIT 5; "
 
 def mostAvailableDisks() -> List[int]:
     most_available_disk = _mostAvailableDisks()
     if type(most_available_disk) == Status:
         return []
-    return [most_available_disk[i]["diskID"] for i in range(most_available_disk.size())]
+    _, most_available = most_available_disk
+    return [most_available[i]["diskID"] for i in range(most_available.size())]
 
 # ----------------------------------------
 
