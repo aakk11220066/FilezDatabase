@@ -20,13 +20,11 @@ def perform_sql_txn(cmd_constructor):
         cmd = cmd_constructor(*args, **kwargs)
 
         try:
-            #print(cmd) #FIXME: DELETEME
             num_results, result = conn.execute(f"BEGIN; {cmd}")
             conn.commit()
         except Exception as e:
             conn.rollback()
             e.conn = conn
-            #print(e) #FIXME: DELETEME
             raise e
         finally:
             conn.close()
@@ -55,7 +53,6 @@ def assert_no_database_error(sql_func):
         try:
             result = sql_func(*args, **kwargs)
         except (DatabaseException.UNKNOWN_ERROR, DatabaseException.ConnectionInvalid, psycopg2.DatabaseError) as e:
-            #print(e)  # FIXME: DELETEME
             return Status.ERROR
         return result
 
@@ -75,7 +72,6 @@ def return_status(sql_func):
             return Status.ALREADY_EXISTS  # if a file/disk/ram with the same ID already exists. *
         except (DatabaseException.UNKNOWN_ERROR, DatabaseException.ConnectionInvalid, psycopg2.DatabaseError) as e:
             e.conn.close()
-            #print(e)  # FIXME: DELETEME
             return Status.ERROR  # in case of a database error
         if result == Status.NOT_EXISTS:  # output overriden by assert_exists decorator
             return Status.NOT_EXISTS
