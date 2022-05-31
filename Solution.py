@@ -515,14 +515,14 @@ def getConflictingDisks() -> List[int]:
 @perform_sql_txn
 def _mostAvailableDisks():
     return f" \
-        SELECT num_files_addable_to_disk.diskID FROM public.disk INNER JOIN ( \
+        SELECT public.disk.diskID FROM public.disk LEFT OUTER JOIN ( \
              SELECT files_that_fit_on_disks.diskID, COUNT(*) FROM ( \
                  SELECT DISTINCT diskID, fileID FROM public.file CROSS JOIN public.disk \
                  WHERE size<=free_space \
              ) files_that_fit_on_disks \
              GROUP BY diskID \
         ) num_files_addable_to_disk ON public.disk.diskID = num_files_addable_to_disk.diskID \
-        ORDER BY count DESC, speed DESC, diskID DESC \
+        ORDER BY count DESC NULLS LAST, speed DESC NULLS LAST, diskID DESC NULLS LAST \
         LIMIT 5; "
 
 def mostAvailableDisks() -> List[int]:
@@ -533,26 +533,41 @@ def mostAvailableDisks() -> List[int]:
 
 # ----------------------------------------
 
+
 @assert_no_database_error
 @perform_sql_txn
 def _getCloseFiles(fileID: int):
     return f" \
-        SELECT fileID FROM ( \
-            SELECT fileID, COUNT(*) FROM public.file_on_disk \
-            WHERE diskID IN ( \
-                SELECT diskID FROM public.file_on_disk \
-                WHERE fileID={fileID} \
-            ) AND fileID != {fileID} \
-            GROUP BY fileID \
-            HAVING 2*COUNT(*) >=ALL ( \
-                SELECT COUNT(*) FROM public.file_on_disk \
-                WHERE fileID={fileID} \
-            ) \
-            ORDER BY count DESC \
+        SELECT disordered_results.fileID FROM ( \
+            SELECT disordered_nonzero_unlimited_results.fileID, count FROM \
+                (SELECT * FROM ( \
+                    ( \
+                        SELECT fileID, count FROM public.file CROSS JOIN (SELECT 0 AS count) pointless_alias1 \
+                        WHERE NOT EXISTS ( \
+                            SELECT * FROM public.file_on_disk WHERE public.file_on_disk.fileID={fileID} \
+                        ) \
+                    ) \
+                    UNION \
+                    ( \
+                        SELECT fileID, COUNT(*) FROM public.file_on_disk \
+                        WHERE diskID IN ( \
+                            SELECT diskID FROM public.file_on_disk \
+                            WHERE fileID={fileID} \
+                        ) AND fileID != {fileID} \
+                        GROUP BY fileID \
+                        HAVING 2*COUNT(*) >=ALL ( \
+                            SELECT COUNT(*) FROM public.file_on_disk \
+                            WHERE fileID={fileID} \
+                        ) \
+                    ) \
+                ) pointless_alias2 \
+                ) disordered_nonzero_unlimited_results \
+            WHERE disordered_nonzero_unlimited_results.fileID != {fileID} \
+            ORDER BY count DESC, disordered_nonzero_unlimited_results.fileID ASC \
             LIMIT 10 \
         ) disordered_results \
-        ORDER BY count ASC \
-    ;"
+        ORDER BY disordered_results.fileID ASC \
+    ; "
 
 def getCloseFiles(fileID: int) -> List[int]:
     result = _getCloseFiles(fileID)

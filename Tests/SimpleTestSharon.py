@@ -971,7 +971,7 @@ class Test(AbstractTest):
         self.assertListEqual([4, 5, 3, 2, 1], Solution.mostAvailableDisks(), "Shouldn't change")
 
     def test_getCloseFiles(self):
-        # database error  #FAILURE on line 983 due to neither file being on any disk
+        # database error 
         Solution.dropTables()
         self.assertListEqual([], Solution.getCloseFiles(1), "Empty List in any other case")
         Solution.createTables()
@@ -1012,7 +1012,6 @@ class Test(AbstractTest):
         self.assertEqual(Status.OK, Solution.deleteFile(File(10, "MP3", 10)), "Should work")
         self.assertEqual(Status.OK, Solution.deleteFile(File(11, "MP3", 11)), "Should work")
         self.assertEqual(Status.OK, Solution.deleteFile(File(12, "MP3", 12)), "Should work")
-        self.assertEqual(Status.NOT_EXISTS, Solution.deleteFile(File(12, "MP3", 12)), "SHOULDN'T WORK BECAUSE ALREADY DELETED")
         # check with disk in the system
         self.assertEqual(Status.OK, Solution.addDisk(Disk(1, "DELL", 10, 10, 10)), "Should work")
         # now:
