@@ -470,13 +470,15 @@ def getFilesCanBeAddedToDisk(diskID: int) -> List[int]:
 
 # ----------------------------------------
 
-def _getFilesCanBeAddedToDiskAndRAM(DiskID: int):
+@assert_no_database_error
+@perform_sql_txn
+def _getFilesCanBeAddedToDiskAndRAM(diskID: int):
     return f" \
     SELECT fileID FROM \
         public.file, \
         (SELECT free_space FROM public.disk WHERE diskID={diskID}) disk_freespace_singleton, \
         (SELECT SUM(size) as ram_space FROM public.all_rams_on_disk WHERE diskID={diskID}) disk_ramspace_singleton \
-    WHERE size <= free_space AND size <= ram_space \
+    WHERE size <= free_space AND (size <= ram_space OR (size=0 AND ram_space IS NULL)) \
     ORDER BY fileID ASC \
     LIMIT 5; "
 
