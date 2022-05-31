@@ -42,7 +42,7 @@ def assert_exists(sql_func):
             num_results, attributes = sql_func(*args, **kwargs)
         except DatabaseException.FOREIGN_KEY_VIOLATION:
             return Status.NOT_EXISTS
-        if num_results == 0:
+        if num_results == 0 or (not attributes.isEmpty() and bool(attributes[0]) and all(elem is None for elem in attributes[0].values())):
             return Status.NOT_EXISTS
         return attributes
 
@@ -405,7 +405,7 @@ def averageFileSizeOnDisk(diskID: int) -> float:
         return -1
     if averages == Status.NOT_EXISTS:
         return 0
-    return averages[0]["avg"]
+    return float(averages[0]["avg"])
 
 
 # ----------------------------------------
@@ -462,6 +462,8 @@ def _getFilesCanBeAddedToDisk(diskID: int):
 
 def getFilesCanBeAddedToDisk(diskID: int) -> List[int]:
     suggested_files = _getFilesCanBeAddedToDisk(diskID)
+    if type(suggested_files) == Status:
+        return []
     return [suggested_files[i]["fileID"] for i in range(suggested_files.size())]
 
 
@@ -502,6 +504,8 @@ def _getConflictingDisks():
 
 def getConflictingDisks() -> List[int]:
     conflicting_disks = _getConflictingDisks()
+    if type(conflicting_disks) == Status:
+        return []
     return [conflicting_disks[i]["diskID"] for i in range(conflicting_disks.size())]
 
 
@@ -523,6 +527,8 @@ def _mostAvailableDisks():
 
 def mostAvailableDisks() -> List[int]:
     most_available_disk = _mostAvailableDisks()
+    if type(most_available_disk) == Status:
+        return []
     return [most_available_disk[i]["diskID"] for i in range(most_available_disk.size())]
 
 # ----------------------------------------
@@ -536,7 +542,7 @@ def _getCloseFiles(fileID: int):
             WHERE diskID IN ( \
                 SELECT diskID FROM public.file_on_disk \
                 WHERE fileID={fileID} \
-            ) \
+            ) AND fileID != {fileID} \
             GROUP BY fileID \
             HAVING 2*COUNT(*) >=ALL ( \
                 SELECT COUNT(*) FROM public.file_on_disk \
@@ -549,5 +555,8 @@ def _getCloseFiles(fileID: int):
     ;"
 
 def getCloseFiles(fileID: int) -> List[int]:
-    closest_files = _getCloseFiles(fileID)
+    result = _getCloseFiles(fileID)
+    if type(result) == Status:
+        return []
+    _, closest_files = result
     return [closest_files[i]["fileID"] for i in range(closest_files.size())]
